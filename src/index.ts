@@ -7,16 +7,23 @@ import crypto from "crypto";
 
 // Firebase init
 const firebaseJson = process.env["FIREBASE_SERVICE_ACCOUNT_JSON"];
-const serviceAccount = firebaseJson ? JSON.parse(firebaseJson) : null;
-if (serviceAccount) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-  });
+if (!firebaseJson) {
+  console.error("❌ FIREBASE_SERVICE_ACCOUNT_JSON env variable missing!");
+  process.exit(1);
 }
-const db = serviceAccount ? admin.firestore() : null;
+const serviceAccount = JSON.parse(firebaseJson);
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+const db = admin.firestore();
 
 // Gemini AI init
-const genAI = new GoogleGenerativeAI(process.env["GEMINI_API_KEY"] || "");
+const geminiKey = process.env["GEMINI_API_KEY"];
+if (!geminiKey) {
+  console.error("❌ GEMINI_API_KEY env variable missing!");
+  process.exit(1);
+}
+const genAI = new GoogleGenerativeAI(geminiKey);
 
 // Razorpay init
 const razorpay = new Razorpay({
@@ -44,8 +51,7 @@ const verifyToken = async (req: any, res: any, next: any) => {
     const token = authHeader.split("Bearer ")[1];
     const decoded = await admin.auth().verifyIdToken(token);
     req.user = decoded;
-    const userRef = db!.collection("users").doc(decoded.uid);
-    req.userRef = userRef;
+    req.userRef = db.collection("users").doc(decoded.uid);
     next();
   } catch (err: any) {
     res.status(401).json({ error: "Invalid token" });
@@ -55,8 +61,7 @@ const verifyToken = async (req: any, res: any, next: any) => {
 // Middleware: check plan limits
 const checkPlan = async (req: any, res: any, next: any) => {
   try {
-    const userRef = req.userRef;
-    const userDoc = await userRef.get();
+    const userDoc = await req.userRef.get();
     const userData = userDoc.data();
     const plan = userData?.plan || "free";
     const monthlyMessages = userData?.monthlyMessages || 0;
@@ -101,7 +106,7 @@ app.post(
       );
       const agentResponse = result.response.text();
 
-      const agentRef = await db!.collection("agents").add({
+      const agentRef = await db.collection("agents").add({
         userId: user.uid,
         name, type, prompt, tone, language, agentResponse,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -130,7 +135,7 @@ app.post(
       const user = req.user;
       const userRef = req.userRef;
 
-      const agentDoc = await db!.collection("agents").doc(agentId).get();
+      const agentDoc = await db.collection("agents").doc(agentId).get();
       if (!agentDoc.exists) {
         res.status(404).json({ error: "Agent not found" });
         return;
@@ -149,7 +154,7 @@ app.post(
       const result = await chat.sendMessage(userMessage);
       const reply = result.response.text();
 
-      await db!.collection("chats").add({
+      await db.collection("chats").add({
         agentId, userId: user.uid, userMessage, agentReply: reply,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       });
@@ -172,7 +177,7 @@ app.get(
   async (req: any, res: any): Promise<void> => {
     try {
       const user = req.user;
-      const snapshot = await db!.collection("agents")
+      const snapshot = await db.collection("agents")
         .where("userId", "==", user.uid)
         .orderBy("createdAt", "desc")
         .get();
@@ -193,14 +198,18 @@ app.delete(
       const userRef = req.userRef;
       const agentId = req.params["id"] as string;
 
-      const agentDoc = await db!.collection("agents").doc(agentId).get();
+      const agentDoc = await db.collection("agents").doc(agentId).get();
+      if (!agentDoc.exists) {
+        res.status(404).json({ error: "Agent not found" });
+        return;
+      }
       if (agentDoc.data()?.["userId"] !== user.uid) {
         res.status(403).json({ error: "Access denied" });
         return;
       }
 
-      await db!.collection("agents").doc(agentId).delete();
-      await userRef?.update({
+      await db.collection("agents").doc(agentId).delete();
+      await userRef.update({
         agentCount: admin.firestore.FieldValue.increment(-1),
       });
 
@@ -256,7 +265,7 @@ app.post(
       }
 
       const user = req.user;
-      await db!.collection("users").doc(user.uid).update({
+      await db.collection("users").doc(user.uid).update({
         plan,
         planActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
         paymentId: razorpay_payment_id,
@@ -271,6 +280,6 @@ app.post(
 
 // Start server
 const port = Number(process.env["PORT"]) || 10000;
-app.listen(port, () =>
+app.listen(port, "0.0.0.0", () =>
   console.log(`✅ MyAgent.io server running on port ${port}`)
 );
