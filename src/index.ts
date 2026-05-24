@@ -13,10 +13,10 @@ if (serviceAccount) {
     credential: admin.credential.cert(serviceAccount),
   });
 }
-const db = admin.firestore();
+const db = serviceAccount ? admin.firestore() : null;
 
 // Gemini AI init
-const genAI = new GoogleGenerativeAI(process.env["GEMINI_API_KEY"]!);
+const genAI = new GoogleGenerativeAI(process.env["GEMINI_API_KEY"] || "");
 
 // Razorpay init
 const razorpay = new Razorpay({
@@ -44,7 +44,7 @@ const verifyToken = async (req: any, res: any, next: any) => {
     const token = authHeader.split("Bearer ")[1];
     const decoded = await admin.auth().verifyIdToken(token);
     req.user = decoded;
-    const userRef = db.collection("users").doc(decoded.uid);
+    const userRef = db!.collection("users").doc(decoded.uid);
     req.userRef = userRef;
     next();
   } catch (err: any) {
@@ -101,14 +101,9 @@ app.post(
       );
       const agentResponse = result.response.text();
 
-      const agentRef = await db.collection("agents").add({
+      const agentRef = await db!.collection("agents").add({
         userId: user.uid,
-        name,
-        type,
-        prompt,
-        tone,
-        language,
-        agentResponse,
+        name, type, prompt, tone, language, agentResponse,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
@@ -135,7 +130,7 @@ app.post(
       const user = req.user;
       const userRef = req.userRef;
 
-      const agentDoc = await db.collection("agents").doc(agentId).get();
+      const agentDoc = await db!.collection("agents").doc(agentId).get();
       if (!agentDoc.exists) {
         res.status(404).json({ error: "Agent not found" });
         return;
@@ -154,11 +149,8 @@ app.post(
       const result = await chat.sendMessage(userMessage);
       const reply = result.response.text();
 
-      await db.collection("chats").add({
-        agentId,
-        userId: user.uid,
-        userMessage,
-        agentReply: reply,
+      await db!.collection("chats").add({
+        agentId, userId: user.uid, userMessage, agentReply: reply,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       });
 
@@ -180,8 +172,7 @@ app.get(
   async (req: any, res: any): Promise<void> => {
     try {
       const user = req.user;
-      const snapshot = await db
-        .collection("agents")
+      const snapshot = await db!.collection("agents")
         .where("userId", "==", user.uid)
         .orderBy("createdAt", "desc")
         .get();
@@ -202,13 +193,13 @@ app.delete(
       const userRef = req.userRef;
       const agentId = req.params["id"] as string;
 
-      const agentDoc = await db.collection("agents").doc(agentId).get();
+      const agentDoc = await db!.collection("agents").doc(agentId).get();
       if (agentDoc.data()?.["userId"] !== user.uid) {
         res.status(403).json({ error: "Access denied" });
         return;
       }
 
-      await db.collection("agents").doc(agentId).delete();
+      await db!.collection("agents").doc(agentId).delete();
       await userRef?.update({
         agentCount: admin.firestore.FieldValue.increment(-1),
       });
@@ -235,8 +226,7 @@ app.post(
         return;
       }
       const order = await razorpay.orders.create({
-        amount,
-        currency: "INR",
+        amount, currency: "INR",
         receipt: `order_${user.uid}_${Date.now()}`,
         notes: { userId: user.uid, plan },
       });
@@ -253,12 +243,7 @@ app.post(
   verifyToken,
   async (req: any, res: any): Promise<void> => {
     try {
-      const {
-        razorpay_order_id,
-        razorpay_payment_id,
-        razorpay_signature,
-        plan,
-      } = req.body;
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan } = req.body;
       const sign = razorpay_order_id + "|" + razorpay_payment_id;
       const expectedSign = crypto
         .createHmac("sha256", process.env["RAZORPAY_KEY_SECRET"] || "placeholder")
@@ -271,7 +256,7 @@ app.post(
       }
 
       const user = req.user;
-      await db.collection("users").doc(user.uid).update({
+      await db!.collection("users").doc(user.uid).update({
         plan,
         planActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
         paymentId: razorpay_payment_id,
@@ -285,12 +270,7 @@ app.post(
 );
 
 // Start server
-const rawPort = process.env["PORT"];
-if (!rawPort) throw new Error("PORT environment variable is required");
-const port = Number(rawPort);
-if (Number.isNaN(port) || port <= 0)
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-
+const port = Number(process.env["PORT"]) || 10000;
 app.listen(port, () =>
   console.log(`✅ MyAgent.io server running on port ${port}`)
 );
